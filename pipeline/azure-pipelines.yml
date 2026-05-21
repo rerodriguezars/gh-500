@@ -1,0 +1,182 @@
+trigger:
+  - feature/us-states-api
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  pythonVersion: '3.11'
+  apiName: 'us-states-api'
+  artifactName: 'us-states-api-build'
+
+stages:
+  - stage: Build
+    displayName: 'Build Stage'
+    jobs:
+      - job: BuildJob
+        displayName: 'Build API'
+        steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: '$(pythonVersion)'
+            displayName: 'Use Python $(pythonVersion)'
+
+          - script: |
+              python -m pip install --upgrade pip
+              pip install -r requirements.txt
+            displayName: 'Install Dependencies'
+
+          - script: |
+              pip install pylint
+              pylint us_states_api.py --fail-under=8.0 || true
+            displayName: 'Run Lint'
+
+          - script: |
+              pip install pytest pytest-cov
+              pytest . -v --cov=. --cov-report=xml --cov-report=html || true
+            displayName: 'Run Tests'
+
+          - task: PublishCodeCoverageResults@1
+            inputs:
+              codeCoverageTool: Cobertura
+              summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/coverage.xml'
+            displayName: 'Publish Code Coverage'
+
+          - task: ArchiveFiles@2
+            inputs:
+              rootFolderOrFile: '$(System.DefaultWorkingDirectory)'
+              includeRootFolder: false
+              archiveType: 'zip'
+              archiveFile: '$(Build.ArtifactStagingDirectory)/$(artifactName).zip'
+              replaceExistingArchive: true
+            displayName: 'Archive Files'
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)'
+              artifactName: '$(artifactName)'
+            displayName: 'Publish Artifacts'
+
+  - stage: Dev
+    displayName: 'Deploy to Dev'
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - deployment: DeployDev
+        displayName: 'Deploy to Dev Environment'
+        environment: 'Development'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadBuildArtifacts@0
+                  inputs:
+                    artifactName: '$(artifactName)'
+                    downloadPath: '$(System.ArtifactsDirectory)'
+                  displayName: 'Download Artifacts'
+
+                - task: ExtractFiles@1
+                  inputs:
+                    archiveFilePatterns: '$(System.ArtifactsDirectory)/$(artifactName)/$(artifactName).zip'
+                    destinationFolder: '$(System.DefaultWorkingDirectory)/extracted'
+                  displayName: 'Extract Files'
+
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: '$(pythonVersion)'
+                  displayName: 'Use Python $(pythonVersion)'
+
+                - script: |
+                    python -m pip install --upgrade pip
+                    pip install -r $(System.DefaultWorkingDirectory)/extracted/requirements.txt
+                  displayName: 'Install Dependencies'
+
+                - script: |
+                    echo "Deploying $(apiName) to Development"
+                    python $(System.DefaultWorkingDirectory)/extracted/us_states_api.py &
+                    sleep 5
+                    curl http://localhost:5000/api/health || echo "Health check failed"
+                  displayName: 'Start API and Health Check'
+
+  - stage: Staging
+    displayName: 'Deploy to Staging'
+    dependsOn: Dev
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployStaging
+        displayName: 'Deploy to Staging Environment'
+        environment: 'Staging'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadBuildArtifacts@0
+                  inputs:
+                    artifactName: '$(artifactName)'
+                    downloadPath: '$(System.ArtifactsDirectory)'
+                  displayName: 'Download Artifacts'
+
+                - task: ExtractFiles@1
+                  inputs:
+                    archiveFilePatterns: '$(System.ArtifactsDirectory)/$(artifactName)/$(artifactName).zip'
+                    destinationFolder: '$(System.DefaultWorkingDirectory)/extracted'
+                  displayName: 'Extract Files'
+
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: '$(pythonVersion)'
+                  displayName: 'Use Python $(pythonVersion)'
+
+                - script: |
+                    python -m pip install --upgrade pip
+                    pip install -r $(System.DefaultWorkingDirectory)/extracted/requirements.txt
+                  displayName: 'Install Dependencies'
+
+                - script: |
+                    echo "Deploying $(apiName) to Staging"
+                    python $(System.DefaultWorkingDirectory)/extracted/us_states_api.py &
+                    sleep 5
+                    curl http://localhost:5000/api/health || echo "Health check failed"
+                  displayName: 'Start API and Health Check'
+
+  - stage: Production
+    displayName: 'Deploy to Production'
+    dependsOn: Staging
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: DeployProduction
+        displayName: 'Deploy to Production Environment'
+        environment: 'Production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: DownloadBuildArtifacts@0
+                  inputs:
+                    artifactName: '$(artifactName)'
+                    downloadPath: '$(System.ArtifactsDirectory)'
+                  displayName: 'Download Artifacts'
+
+                - task: ExtractFiles@1
+                  inputs:
+                    archiveFilePatterns: '$(System.ArtifactsDirectory)/$(artifactName)/$(artifactName).zip'
+                    destinationFolder: '$(System.DefaultWorkingDirectory)/extracted'
+                  displayName: 'Extract Files'
+
+                - task: UsePythonVersion@0
+                  inputs:
+                    versionSpec: '$(pythonVersion)'
+                  displayName: 'Use Python $(pythonVersion)'
+
+                - script: |
+                    python -m pip install --upgrade pip
+                    pip install -r $(System.DefaultWorkingDirectory)/extracted/requirements.txt
+                  displayName: 'Install Dependencies'
+
+                - script: |
+                    echo "Deploying $(apiName) to Production"
+                    python $(System.DefaultWorkingDirectory)/extracted/us_states_api.py &
+                    sleep 5
+                    curl http://localhost:5000/api/health || echo "Health check failed"
+                  displayName: 'Start API and Health Check'
